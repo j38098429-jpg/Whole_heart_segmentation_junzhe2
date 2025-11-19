@@ -5,7 +5,6 @@ import pandas as pd
 
 class Build():
     def __init__(self,file_list):
-        self.a = 1
         self.file_list = file_list
         self.data = pd.read_excel(file_list, dtype = {'Patient_ID': str})
 
@@ -18,8 +17,9 @@ class Build():
                 c = pd.concat([c,cases])
 
         batch_list = np.asarray(c['batch'])
-        patient_id_list = np.asarray(c['Patient_ID'])
-        input_file_list = np.asarray(c['input_file'])
-        reference_file_list = np.asarray(c['reference_file']) 
+        patient_id_list = np.asarray(c['case_id'])
+        slice_index_list = np.asarray(c['slice_index'])
+        img_file_list = np.asarray(c['img_file'])
+        seg_file_list = np.asarray(c['seg_file'])
         
-        return batch_list, patient_id_list,  input_file_list, reference_file_list
+        return batch_list, patient_id_list, slice_index_list, img_file_list, seg_file_list

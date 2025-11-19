@@ -1,7 +1,9 @@
 #!/usr/bin/env python
+import sys
+sys.path.append('/host/d/Github')
 import numpy as np
 import random
-import cineCMR_SAM.Data_processing as Data_processing
+import Whole_heart_segmentation_junzhe.Data_processing as Data_processing
 import PIL, PIL.ImageOps, PIL.ImageEnhance, PIL.ImageDraw
 from PIL import Image
 
@@ -24,23 +26,20 @@ def random_rotate(i, z_rotate_degree = None, z_rotate_range = [-10,10], fill_val
         fill_val = np.min(i)
     
     if i.ndim == 2:
-        degrees = z_rotate_degree
+        return Data_processing.rotate_image(np.copy(i), z_rotate_degree, order = order, fill_val = fill_val), z_rotate_degree
     elif i.ndim == 3:
-        degrees = [0,0,z_rotate_degree]
-    
-    return Data_processing.rotate_image(np.copy(i), degrees, order = order, fill_val = fill_val, ), z_rotate_degree
+        return Data_processing.rotate_image(np.copy(i), [0,0,z_rotate_degree], order = order, fill_val = fill_val, ), z_rotate_degree
 
 def random_translate(i, x_translate = None,  y_translate = None, translate_range = [-10,10]):
     # only do translate according to x and y
     if x_translate is None or y_translate is None:
         x_translate = int(random.uniform(translate_range[0], translate_range[1]))
         y_translate = int(random.uniform(translate_range[0], translate_range[1]))
-    if i.ndim == 2:
-        displacement = [x_translate, y_translate]
-    else:
-        displacement = [x_translate, y_translate, 0]
 
-    return Data_processing.translate_image(np.copy(i), displacement), x_translate,y_translate
+    if i.ndim ==2:
+        return Data_processing.translate_image(np.copy(i), [x_translate,y_translate]), x_translate,y_translate
+    elif i.ndim ==3:
+        return Data_processing.translate_image(np.copy(i), [x_translate,y_translate,0]), x_translate,y_translate
 
 
 def random_brightness(i, v = None):

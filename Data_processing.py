@@ -1,11 +1,11 @@
 import sys
-sys.path.append('/host/c/Users/Junzhe/Desktop/Whole_heart_segmentation/GitHub/')
+sys.path.append('/host/d/GitHub/')
 import numpy as np
 import nibabel as nb
 import os
 from skimage.measure import block_reduce
 from scipy import ndimage
-import original_SAM.functions_collection as ff
+import Whole_heart_segmentation_junzhe.functions_collection as ff
 
 
 # function: basic crop or pad

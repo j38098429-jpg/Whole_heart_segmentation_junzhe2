@@ -55,7 +55,7 @@ class Sam(nn.Module):
         self,
         batched_input: List[Dict[str, Any]],
         multimask_output: bool,
-    ) -> List[Dict[str, torch.Tensor]]:
+    ) -> List[Dict[str, torch.Tensor]]: 
         """
         Predicts masks end-to-end from provided images and prompts.
         If prompts are not known in advance, using SamPredictor is
