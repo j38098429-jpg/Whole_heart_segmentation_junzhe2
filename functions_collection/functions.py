@@ -646,3 +646,64 @@ def find_LV_enclosed_by_myo(image):
     LV = diff.astype(np.int32)
 
     return LV
+
+
+import numpy as np
+
+def get_tilted_3d_bbox(mask, padding=5):
+    """
+    a. 寻找心脏像素 (mask > 0)
+    b. 最小 BBox + Buffer
+    c. 3D/2D 兼容逻辑 (修复 ValueError)
+    d. 确保 XY 轴大小一致 (Square)
+    """
+    # 1. 找到所有非零像素的坐标
+    coords = np.where(mask > 0)
+    if len(coords[0]) == 0:
+        return None
+
+    # 获取维度数量 (2 代表 2D, 3 代表 3D)
+    ndim = len(coords)
+    
+    # 2. 计算极值 (修复解包报错)
+    if ndim == 3:
+        # 3D 情况: [Z, Y, X]
+        z_min, y_min, x_min = [np.min(c) for c in coords]
+        z_max, y_max, x_max = [np.max(c) for c in coords]
+    else:
+        # 2D 情况: [Y, X]
+        z_min, z_max = 0, 0 # 2D 没有深度，设为 0
+        y_min, x_min = [np.min(c) for c in coords]
+        y_max, x_max = [np.max(c) for c in coords]
+
+    # 3. 添加 Buffer (Requirement b)
+    x_min, x_max = x_min - padding, x_max + padding
+    y_min, y_max = y_min - padding, y_max + padding
+    z_min, z_max = z_min - padding, z_max + padding
+
+    # 4. 强制 XY 为正方形 (Requirement d)
+    width_x = x_max - x_min
+    width_y = y_max - y_min
+    max_side = max(width_x, width_y)
+
+    center_x = (x_min + x_max) / 2
+    center_y = (y_min + y_max) / 2
+
+    x1 = int(center_x - max_side / 2)
+    x2 = int(center_x + max_side / 2)
+    y1 = int(center_y - max_side / 2)
+    y2 = int(center_y + max_side / 2)
+
+    # 5. 边界保护 (基于输入 mask 的形状)
+    # mask 形状通常是 (H, W) 或 (D, H, W)
+    h_limit = mask.shape[0] if ndim == 2 else mask.shape[1]
+    w_limit = mask.shape[1] if ndim == 2 else mask.shape[2]
+    
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w_limit, x2), min(h_limit, y2)
+    
+    return {
+        'sam_prompt': [x1, y1, x2, y2],
+        'z_range': [int(z_min), int(z_max)],
+        'side_length': max_side
+    }

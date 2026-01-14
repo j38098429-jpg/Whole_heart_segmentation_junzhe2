@@ -50,7 +50,7 @@ class Sam(nn.Module):
     def device(self) -> Any:
         return self.pixel_mean.device
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward(
         self,
         batched_input: List[Dict[str, Any]],
@@ -94,7 +94,9 @@ class Sam(nn.Module):
                 shape BxCxHxW, where H=W=256. Can be passed as mask input
                 to subsequent iterations of prediction.
         """
+       
         input_images = torch.stack([self.preprocess(x["image"]) for x in batched_input], dim=0)
+        print('input images: ', input_images.shape)
         image_embeddings = self.image_encoder(input_images)
 
         outputs = []
@@ -117,10 +119,10 @@ class Sam(nn.Module):
             )
             masks = self.postprocess_masks(
                 low_res_masks,
-                input_size=image_record["image"].shape[-2:],
-                original_size=image_record["original_size"],
+                input_size= image_record["image"].shape[-2:],
+                original_size= image_record["image"].shape[-2:],# image_record["original_size"],
             )
-            masks = masks > self.mask_threshold
+            ######masks = masks > self.mask_threshold
             outputs.append(
                 {
                     "masks": masks,
@@ -171,4 +173,5 @@ class Sam(nn.Module):
         padh = self.image_encoder.img_size - h
         padw = self.image_encoder.img_size - w
         x = F.pad(x, (0, padw, 0, padh))
+        print('x shape: ',x.shape)
         return x

@@ -1,15 +1,12 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
+# build_sam.py
+# 版权所有 (c) Meta Platforms, Inc. 及其关联公司。
+# 保留所有权利。
 
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
+# 本源文件根据本源树根目录中的 LICENSE 文件中发现的许可证进行许可。
 
 import torch
-
 from functools import partial
-
 from .modeling import ImageEncoderViT, MaskDecoder, PromptEncoder, Sam, TwoWayTransformer
-
 
 def build_sam_vit_h(checkpoint=None):
     return _build_sam(
@@ -20,9 +17,7 @@ def build_sam_vit_h(checkpoint=None):
         checkpoint=checkpoint,
     )
 
-
 build_sam = build_sam_vit_h
-
 
 def build_sam_vit_l(checkpoint=None):
     return _build_sam(
@@ -33,7 +28,6 @@ def build_sam_vit_l(checkpoint=None):
         checkpoint=checkpoint,
     )
 
-
 def build_sam_vit_b(checkpoint=None):
     return _build_sam(
         encoder_embed_dim=768,
@@ -43,14 +37,12 @@ def build_sam_vit_b(checkpoint=None):
         checkpoint=checkpoint,
     )
 
-
 sam_model_registry = {
     "default": build_sam_vit_h,
     "vit_h": build_sam_vit_h,
     "vit_l": build_sam_vit_l,
     "vit_b": build_sam_vit_b,
 }
-
 
 def _build_sam(
     encoder_embed_dim,
@@ -63,6 +55,7 @@ def _build_sam(
     image_size = 1024
     vit_patch_size = 16
     image_embedding_size = image_size // vit_patch_size
+    
     sam = Sam(
         image_encoder=ImageEncoderViT(
             depth=encoder_depth,
@@ -85,23 +78,40 @@ def _build_sam(
             mask_in_chans=16,
         ),
         mask_decoder=MaskDecoder(
-            num_multimask_outputs=3,
+            # --- 核心修改点：显式设置类别数为 3 ---
+            num_classes=3, 
+            # ------------------------------------
+            transformer_dim=prompt_embed_dim,
             transformer=TwoWayTransformer(
                 depth=2,
                 embedding_dim=prompt_embed_dim,
                 mlp_dim=2048,
                 num_heads=8,
             ),
-            transformer_dim=prompt_embed_dim,
             iou_head_depth=3,
             iou_head_hidden_dim=256,
         ),
         pixel_mean=[123.675, 116.28, 103.53],
         pixel_std=[58.395, 57.12, 57.375],
     )
+    
     sam.eval()
     if checkpoint is not None:
         with open(checkpoint, "rb") as f:
             state_dict = torch.load(f)
-        sam.load_state_dict(state_dict)
+        
+        # --- 新增的过滤逻辑：解决形状不匹配报错 ---
+        model_dict = sam.state_dict()
+        # 只有当 key 存在且形状一致时才加载（跳过 3 分类不匹配的输出头）
+        filtered_state_dict = {
+            k: v for k, v in state_dict.items() 
+            if k in model_dict and v.shape == model_dict[k].shape
+        }
+        
+        # 使用 strict=False 加载匹配的部分
+        sam.load_state_dict(filtered_state_dict, strict=False)
+        
+        print(f"✅ 成功加载匹配的权重，跳过了形状不符的输出层。")
+        # ---------------------------------------
+
     return sam
