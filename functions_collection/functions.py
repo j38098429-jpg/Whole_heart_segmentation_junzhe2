@@ -647,63 +647,52 @@ def find_LV_enclosed_by_myo(image):
 
     return LV
 
-
 import numpy as np
-
-def get_tilted_3d_bbox(mask, padding=5):
+def get_tilted_3d_bbox(mask, padding=10):
     """
-    a. 寻找心脏像素 (mask > 0)
-    b. 最小 BBox + Buffer
-    c. 3D/2D 兼容逻辑 (修复 ValueError)
-    d. 确保 XY 轴大小一致 (Square)
+    修复后的 Task 2 函数：自动兼容 2D 切片和 3D 卷输入
+    a. 使用 label 找到心脏像素。
+    b. 最小 BBox + Buffer。
+    c. 处理 Tilted 坐标系。
+    d. 强制 XY 正方形约束。
     """
-    # 1. 找到所有非零像素的坐标
-    coords = np.where(mask > 0)
-    if len(coords[0]) == 0:
+    # 1. 找到所有心脏像素坐标 (非零像素)
+    coords = np.argwhere(mask > 0)
+    if coords.size == 0:
+        print("⚠️ 警告: 在当前掩码中未发现心脏像素。")
         return None
 
-    # 获取维度数量 (2 代表 2D, 3 代表 3D)
-    ndim = len(coords)
-    
-    # 2. 计算极值 (修复解包报错)
-    if ndim == 3:
-        # 3D 情况: [Z, Y, X]
-        z_min, y_min, x_min = [np.min(c) for c in coords]
-        z_max, y_max, x_max = [np.max(c) for c in coords]
+    # 2. 动态识别维度并解包 (修复 ValueError 的关键)
+    # coords.shape[1] 代表坐标维度：3 代表 (Z, Y, X)，2 代表 (Y, X)
+    if coords.shape[1] == 3:
+        z_min, y_min, x_min = coords.min(axis=0)
+        z_max, y_max, x_max = coords.max(axis=0)
+    elif coords.shape[1] == 2:
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        z_min, z_max = 0, 0  # 2D 场景下深度跨度设为 0
     else:
-        # 2D 情况: [Y, X]
-        z_min, z_max = 0, 0 # 2D 没有深度，设为 0
-        y_min, x_min = [np.min(c) for c in coords]
-        y_max, x_max = [np.max(c) for c in coords]
+        return None
 
-    # 3. 添加 Buffer (Requirement b)
-    x_min, x_max = x_min - padding, x_max + padding
-    y_min, y_max = y_min - padding, y_max + padding
-    z_min, z_max = z_min - padding, z_max + padding
+    # 3. 计算中心点与原始跨度 (Span)
+    y_center, x_center = (y_min + y_max) // 2, (x_min + x_max) // 2
+    y_span, x_span = y_max - y_min, x_max - x_min
 
-    # 4. 强制 XY 为正方形 (Requirement d)
-    width_x = x_max - x_min
-    width_y = y_max - y_min
-    max_side = max(width_x, width_y)
+    # 4. 强制 XY 轴为正方形并添加 Buffer (满足 Task B.2.d)
+    # 取 XY 中的最大跨度并加上 2 倍 padding (左右各加一次)
+    max_span = max(x_span, y_span) + (2 * padding)
+    half_span = max_span // 2
 
-    center_x = (x_min + x_max) / 2
-    center_y = (y_min + y_max) / 2
-
-    x1 = int(center_x - max_side / 2)
-    x2 = int(center_x + max_side / 2)
-    y1 = int(center_y - max_side / 2)
-    y2 = int(center_y + max_side / 2)
-
-    # 5. 边界保护 (基于输入 mask 的形状)
-    # mask 形状通常是 (H, W) 或 (D, H, W)
-    h_limit = mask.shape[0] if ndim == 2 else mask.shape[1]
-    w_limit = mask.shape[1] if ndim == 2 else mask.shape[2]
+    # 计算最终的正方形边界坐标
+    new_x_min, new_x_max = x_center - half_span, x_center + half_span
+    new_y_min, new_y_max = y_center - half_span, y_center + half_span
     
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(w_limit, x2), min(h_limit, y2)
-    
+    # Z 轴仅添加 buffer，不需要强制尺寸一致
+    new_z_min, new_z_max = z_min - padding, z_max + padding
+
+    # 5. 返回结果 (适配 SAM 的 [x1, y1, x2, y2] 格式)
     return {
-        'sam_prompt': [x1, y1, x2, y2],
-        'z_range': [int(z_min), int(z_max)],
-        'side_length': max_side
+        'sam_prompt': [int(new_x_min), int(new_y_min), int(new_x_max), int(new_y_max)],
+        'z_range': [int(new_z_min), int(new_z_max)],
+        'side_length': max_span
     }
