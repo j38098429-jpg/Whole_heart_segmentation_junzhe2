@@ -96,7 +96,7 @@ class Sam(nn.Module):
         """
        
         input_images = torch.stack([self.preprocess(x["image"]) for x in batched_input], dim=0)
-        print('input images: ', input_images.shape)
+        #print('input images: ', input_images.shape)
         image_embeddings = self.image_encoder(input_images)
 
         outputs = []
@@ -173,5 +173,5 @@ class Sam(nn.Module):
         padh = self.image_encoder.img_size - h
         padw = self.image_encoder.img_size - w
         x = F.pad(x, (0, padw, 0, padh))
-        print('x shape: ',x.shape)
+        #print('x shape: ',x.shape)
         return x

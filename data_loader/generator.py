@@ -266,7 +266,7 @@ class Dataset_CMR(torch.utils.data.Dataset):
             ii = np.round(ii).astype(int)
             # --- 3 分类强制转换逻辑 ---
             # 假设原始数据中：1=LV, 2=Myo, 3=RV
-            # 我们只需要 0, 1, 2。如果存在 3，可以将其归为背景或合并。
+            # 我们只需要 0, 1, 2
             # 这里确保标签不会超过 2
             ii[ii > 2] = 0 
         return ii

@@ -7,30 +7,41 @@ from torch.nn import functional as F
 from typing import List, Tuple, Type
 from .common import LayerNorm2d
 
+#
 class MaskDecoder(nn.Module):
     def __init__(
         self,
         *,
         transformer_dim: int,
         transformer: nn.Module,
-        num_classes: int = 3,  # 核心修改：适配 LV, Myocardium, Background
+        num_classes: int = 3,
         activation: Type[nn.Module] = nn.GELU,
+        # 👇 这些参数其实没用了，但保留着防止报错
         iou_head_depth: int = 3,
         iou_head_hidden_dim: int = 256,
     ) -> None:
         """
-        预测给定图像和提示嵌入的掩码。
+        改造后的 Decoder：专注于 Multi-Class Semantic Segmentation
+        不再预测 IoU，不再进行歧义性选择。
         """
         super().__init__()
         self.transformer_dim = transformer_dim
         self.transformer = transformer
 
-        # 定义分类所需的 Tokens
-        self.iou_token = nn.Embedding(1, transformer_dim)
-        self.num_mask_tokens = num_classes  # 3 个类别
-        self.mask_tokens = nn.Embedding(self.num_mask_tokens, transformer_dim)
+        self.num_classes = num_classes
 
-        # 图像特征上采样层
+        self.num_mask_tokens = num_classes
+
+        # 1. 【手术】移除 IoU Token
+        # self.iou_token = nn.Embedding(1, transformer_dim) <--- 删掉它！
+        
+        # 2. 【重定义】这里的 mask_tokens 现在就是“类别锚点” (Class Anchors)
+        # Token[0] -> 负责找背景
+        # Token[1] -> 负责找左心室
+        # Token[2] -> 负责找心肌
+        self.class_embeddings = nn.Embedding(self.num_classes, transformer_dim)
+
+        # 3. 图像特征上采样层 (保留原样)
         self.output_upscaling = nn.Sequential(
             nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
             LayerNorm2d(transformer_dim // 4),
@@ -39,18 +50,16 @@ class MaskDecoder(nn.Module):
             activation(),
         )
 
-        # 为每个类别定义独立的预测头 (Hypernetworks)
+        # 4. 每个类别独立的 MLP (保留原样)
         self.output_hypernetworks_mlps = nn.ModuleList(
             [
                 MLP(transformer_dim, transformer_dim, transformer_dim // 8, 3)
-                for i in range(self.num_mask_tokens)
+                for i in range(self.num_classes)
             ]
         )
 
-        # IoU 质量预测头
-        self.iou_prediction_head = MLP(
-            transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
-        )
+        # 5. 【手术】移除 IoU 预测头
+        # self.iou_prediction_head = ... <--- 删掉它！
 
     def forward(
         self,
@@ -60,16 +69,21 @@ class MaskDecoder(nn.Module):
         dense_prompt_embeddings: torch.Tensor,
         multimask_output: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        前向传播：始终返回 3 通道的分类结果。
-        """
-        masks, iou_pred = self.predict_masks(
+        
+        # 直接调用预测逻辑
+        masks = self.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
         )
-        return masks, iou_pred
+        
+        # 为了兼容 sam.py 的接口 (它期望返回两个值)，我们返回一个假的 IoU
+        # 形状 [B, num_classes]
+        batch_size = masks.shape[0]
+        dummy_iou = torch.ones(batch_size, self.num_classes, dtype=masks.dtype, device=masks.device)
+        
+        return masks, dummy_iou
 
     def predict_masks(
         self,
@@ -77,53 +91,44 @@ class MaskDecoder(nn.Module):
         image_pe: torch.Tensor,
         sparse_prompt_embeddings: torch.Tensor,
         dense_prompt_embeddings: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        预测掩码的具体逻辑。
-        """
-        # --- 核心修复：手动拼接固定 Tokens (解决之前 main.ipynb 里的 IndexError) ---
-        # 即使 sparse_prompt_embeddings 为空，也要保证 tokens 长度不为 0
-        output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
+    ) -> torch.Tensor:
         
-        # 扩展到 Batch 维度 [B, 4, 256] (1个IoU + 3个类别Token)
-        batch_size = sparse_prompt_embeddings.size(0)
-        output_tokens = output_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        # 1. 【核心修改】不再拼接 IoU Token
+        # output_tokens 就是我们的 3 个类别查询向量
+        output_tokens = self.class_embeddings.weight
         
-        # 拼接提示词嵌入 [B, 4 + N, 256]
+        # 扩展到 Batch 维度 [B, 3, 256]
+        output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
+        
+        # 拼接提示词 (BBox) -> [B, 3 + N, 256]
         tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
 
-        # 运行 Transformer
-        # 此时 hs 的长度至少为 4，hs[:, 0, :] 不会再报错
+        # 2. 运行 Transformer
+        # 它现在的任务是：结合 BBox 的位置信息，去图像里寻找 3 种特定的特征
         hs, src = self.transformer(image_embeddings, image_pe, tokens)
         
-        iou_token_out = hs[:, 0, :]
-        mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
+        # 3. 提取输出
+        # hs 的前 3 个 token 就是我们要的类别特征
+        # 这里的 embedding 代表了模型对 "背景"、"LV"、"Myo" 的理解
+        class_tokens_out = hs[:, 0 : self.num_classes, :]
 
-        # 图像特征上采样并融合密集提示
+        # 4. 上采样图像特征 (Pixel Features)
         b, c, h, w = image_embeddings.shape
-        # 将 transformer 输出的 src [B, L, C] 还原为 [B, C, H, W] 
-        # (假设原始 embedding 为 64x64, 上采样后为 256x256)
         src = src.transpose(1, 2).view(b, c, h, w)
         src = src + dense_prompt_embeddings
         upscaled_embedding = self.output_upscaling(src)
 
-        # 生成 3 分类掩码权重
+        # 5. 生成 Mask
+        # 每个类别用自己的 MLP 生成一个权重向量，去和图像特征做点积
         hyper_in_list = []
-        for i in range(self.num_mask_tokens):
-            hyper_in_list.append(self.output_hypernetworks_mlps[i](mask_tokens_out[:, i, :]))
+        for i in range(self.num_classes):
+            hyper_in_list.append(self.output_hypernetworks_mlps[i](class_tokens_out[:, i, :]))
         hyper_in = torch.stack(hyper_in_list, dim=1)
 
-        # 执行点积生成最终掩码结果 [B, 3, H_up, W_up]
         b, c, h, w = upscaled_embedding.shape
         masks = (hyper_in @ upscaled_embedding.view(b, c, -1)).view(b, -1, h, w)
 
-        # 预测 IoU
-        iou_pred = self.iou_prediction_head(iou_token_out)
-        
-        # 汇报用：打印关键维度
-        # print(f"Decoder Output -> Masks: {masks.shape}, IoU: {iou_pred.shape}")
-
-        return masks, iou_pred
+        return masks
 
 class MLP(nn.Module):
     def __init__(
